@@ -123,6 +123,8 @@ function afterUnlock() {
   UI.view = VIEWS[h] ? h : 'dashboard'; UI._last = null;
   render(); lastAct = Date.now();
   if (r.n || r.p) toast(`${r.n ? `${r.n} fällige Buchung${r.n > 1 ? 'en' : ''}` : ''}${r.n && r.p ? ' und ' : ''}${r.p ? `${r.p} Sparplan-Ausführung${r.p > 1 ? 'en' : ''}` : ''} automatisch gebucht`, 'info');
+  // Assistent nur für einen wirklich leeren Tresor – sonst würde er übernommene Konten ersetzen
+  if (!S.settings.onboarded && S.accounts.length) { S.settings.onboarded = true; persist(); }
   if (!S.settings.onboarded) onboardingModal();
   else if (!S.settings.demo && S.transactions.length > 20 && (!S.settings.lastBackup || daysBetween(S.settings.lastBackup, today()) > 30)) setTimeout(() => toast('Tipp: Dein letztes Backup ist über 30 Tage her (Einstellungen → Backup).', 'info'), 1500);
 }

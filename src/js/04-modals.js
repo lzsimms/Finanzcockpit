@@ -590,12 +590,12 @@ function setupOwnModal() {
       <p class="hint">Deine Wertpapiere trägst du danach unter <b>Depot → Neue Position</b> ein (Stückzahl & Ø Kaufkurs findest du in der TR-App).</p>`,
     onSubmit(fd) {
       const v = k => round2(optNum(fd[k]));
-      S.accounts = [
+      S.accounts.push(
         { id: uid(), name: 'Bargeld', type: 'cash', opening: v('cash'), color: '#f5b544', icon: '💶' },
         { id: uid(), name: (fd.n1 || 'Girokonto').trim(), type: 'bank', opening: v('b1'), color: '#7c6cff', icon: '🏦' },
         { id: uid(), name: (fd.n2 || 'Tagesgeld').trim(), type: 'bank', opening: v('b2'), color: '#22d3ee', icon: '🐷' },
         { id: uid(), name: (fd.n3 || 'Trade Republic').trim(), type: 'depot', opening: v('b3'), color: '#2fd47a', icon: '📈' },
-      ];
+      );
       S.settings.onboarded = true; S.settings.demo = false;
       commit('Eingerichtet – viel Spaß! 🎉');
       setTimeout(confetti, 200);
@@ -603,6 +603,7 @@ function setupOwnModal() {
   });
 }
 function loadDemo() {
+  if (S.accounts.length) { toast('Dein Tresor enthält bereits Daten – die Demo würde sie ersetzen.', 'err'); closeModal(); return; }
   const keep = { name: S.settings.name, autoLock: S.settings.autoLock, lockOnHide: S.settings.lockOnHide, birthYear: S.settings.birthYear };
   S = buildDemo(); Object.assign(S.settings, keep);
   UI.fc = null; closeModal();

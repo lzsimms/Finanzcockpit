@@ -28,12 +28,16 @@ function resetBaseline() { lastSeen = null; stampChanges(); }
 function mergeState(L, R) {
   const tomb = { ...(R.tomb || {}) };
   for (const [k, v] of Object.entries(L.tomb || {})) tomb[k] = Math.max(v, tomb[k] || 0);
-  let added = 0, updated = 0, removed = 0;
+  let added = 0, updated = 0, removed = 0; const blocked = [];
   for (const col of SYNC_COLS) {
     const m = new Map((L[col] || []).map(r => [r.id, r])), localIds = new Set(m.keys());
     for (const r of R[col] || []) {
       const l = m.get(r.id);
-      if (!l) { if (!(tomb[r.id] >= (r._u || 0))) added++; m.set(r.id, r); }
+      if (!l) {
+        if (!(tomb[r.id] >= (r._u || 0))) added++;
+        else if ((L.tomb || {})[r.id] >= (r._u || 0)) blocked.push({ col, id: r.id });   // nur hier als gelöscht vermerkt
+        m.set(r.id, r);
+      }
       else if ((r._u || 0) > (l._u || 0)) { m.set(r.id, r); if (JSON.stringify(r) !== JSON.stringify(l)) updated++; }
     }
     L[col] = [...m.values()].filter(r => {
@@ -48,8 +52,22 @@ function mergeState(L, R) {
   for (const s of L.snapshots || []) snaps.set(s.d, s);
   L.snapshots = [...snaps.values()].sort((a, b) => a.d < b.d ? -1 : 1);
   if (!L.settings.name && R.settings?.name) L.settings.name = R.settings.name;
-  if (R.settings?.onboarded) { L.settings.onboarded = true; if (!R.settings.demo) L.settings.demo = false; }
-  return { added, updated, removed };
+  if (R.settings?.onboarded || (R.accounts || []).length) { L.settings.onboarded = true; if (!R.settings?.demo) L.settings.demo = false; }
+  return { added, updated, removed, blocked };
+}
+/** Einträge des anderen Geräts zurückholen, die auf diesem Gerät nur als gelöscht vermerkt waren */
+function restoreBlocked(remote, blocked) {
+  const now = Date.now(); let n = 0;
+  for (const { col, id } of blocked) {
+    const r = (remote[col] || []).find(x => x.id === id); if (!r) continue;
+    delete S.tomb[id];
+    if (!S[col].some(x => x.id === id)) { S[col].push({ ...r, _u: now }); n++; }
+  }
+  C = null; resetBaseline();
+  for (const { col, id } of blocked) { const r = S[col].find(x => x.id === id); if (r) r._u = now; }
+  commit(`${n} Einträge wiederhergestellt ✅`);
+  scheduleAutoSync();
+  return n;
 }
 
 /** Sync-Datei mit dem eigenen Schlüssel öffnen (gleiches Salt = gleicher Tresor), sonst Passwort nötig */
@@ -80,8 +98,10 @@ function applyMerge(remote, quiet = false) {
   processDue(S);
   S.settings.lastSync = new Date().toISOString();
   const changed = r.added + r.updated + r.removed;
-  commit(changed ? `Vom anderen Gerät: ${r.added} neu · ${r.updated} geändert${r.removed ? ` · ${r.removed} gelöscht` : ''}` : quiet ? null : `Nichts Neues – Sync-Datei vom ${fmtStamp(info.saved)}`);
-  return { ...r, info };
+  const restore = r.blocked.length ? { label: 'Wiederherstellen', run: () => restoreBlocked(m, r.blocked) } : null;
+  if (restore) commit(`${r.blocked.length} Einträge vom anderen Gerät sind hier als gelöscht vermerkt`, { tone: 'info', action: restore, sticky: true });
+  else commit(changed ? `Vom anderen Gerät: ${r.added} neu · ${r.updated} geändert${r.removed ? ` · ${r.removed} gelöscht` : ''}` : quiet ? null : `Nichts Neues – Sync-Datei vom ${fmtStamp(info.saved)}`);
+  return { ...r, info, remote: m };
 }
 const syncInfoHTML = (r) => `<div class="preview" style="flex-direction:column;gap:4px;text-align:left"><span>Stand der Sync-Datei: <b>${fmtStamp(r.info.saved)}</b></span><span class="muted small">enthält ${r.info.accounts} Konten · ${r.info.tx} Buchungen · ${r.info.holdings} Wertpapiere</span><span class="muted small">übernommen: ${r.added} neu · ${r.updated} geändert · ${r.removed} gelöscht</span></div>`;
 
@@ -186,9 +206,16 @@ function mobileSyncModal() {
       const ageH = res.info.saved ? (Date.now() - new Date(res.info.saved)) / 36e5 : 0;
       form.querySelector('.modal-body').innerHTML = `<div class="empty" style="padding:8px 4px"><div class="e-ic">✅</div><b>Zusammengeführt!</b></div>${syncInfoHTML(res)}
         ${ageH > 1 ? `<p class="small warn">⚠️ Die Datei ist ${ageH < 48 ? Math.round(ageH) + ' Stunden' : Math.round(ageH / 24) + ' Tage'} alt. Fehlen Zahlen? Dann am anderen Gerät „Jetzt abgleichen“ tippen, kurz warten, bis iCloud die Datei hochgeladen hat, und hier erneut abgleichen.</p>` : ''}
+        ${res.blocked.length ? `<div class="preview" style="flex-direction:column;gap:8px;text-align:left;border-color:var(--warn)"><span class="warn"><b>⚠️ ${res.blocked.length} Einträge vom anderen Gerät</b> (z. B. Konten) wurden hier früher gelöscht und deshalb nicht übernommen.</span><button type="button" class="btn sm primary" data-restore>${ic('refresh', 14)} Wiederherstellen</button></div>` : ''}
         <p class="small muted">Sichere jetzt die aktualisierte Datei zurück in denselben Cloud-Ordner und wähle dort <b>„Ersetzen“</b>.</p>
         <button type="button" class="btn primary" data-share2>${ic('upload', 16)} Aktualisierte Datei sichern</button>`;
-      form.querySelector('[data-share2]').addEventListener('click', async () => { await shareSyncFile(); closeModal(); });
+      let restored = !res.blocked.length;
+      const rb = form.querySelector('[data-restore]');
+      if (rb) rb.addEventListener('click', () => { restoreBlocked(res.remote, res.blocked); restored = true; rb.closest('.preview').innerHTML = '<span class="pos">✅ Wiederhergestellt</span>'; $$('.toast').forEach(t => t.remove()); });
+      form.querySelector('[data-share2]').addEventListener('click', async () => {
+        if (!restored && !(await confirmDialog({ title: 'Wirklich ohne Wiederherstellen sichern?', text: `Dann werden diese ${res.blocked.length} Einträge <b>auch auf dem anderen Gerät gelöscht</b>. Im Zweifel erst „Wiederherstellen“ tippen.`, ok: 'Trotzdem sichern', danger: true }))) return;
+        await shareSyncFile(); closeModal();
+      });
       form.querySelector('[type=submit]').hidden = true;
       return false;
     },
