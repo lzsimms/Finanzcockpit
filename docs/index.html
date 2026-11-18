@@ -888,6 +888,34 @@ function migrate(d) {
   const base = defaultState();
   for (const k of Object.keys(base)) if (d[k] == null) d[k] = base[k];
   d.settings = { ...base.settings, ...d.settings };
+  return sanitizeState(d);
+}
+/** Verteidigung in der Tiefe: Alles, was je in HTML-Attributen landet, auf erlaubte Formen beschränken.
+    (Geladene Daten sind per AES-GCM authentifiziert – das hier schützt zusätzlich, falls doch etwas Unerwartetes ankommt.) */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/, SAFE_COLOR = /^#[0-9a-fA-F]{6}$/, SAFE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const cleanIcon = s => String(s || '').replace(/[<>&"'`=\\/\s]/g, '').slice(0, 8) || '•';
+function sanitizeState(d) {
+  const cols = ['accounts', 'categories', 'transactions', 'recurring', 'holdings', 'trades', 'plans', 'goals'];
+  for (const col of cols) {
+    if (!Array.isArray(d[col])) { d[col] = []; continue; }
+    d[col] = d[col].filter(r => r && typeof r === 'object' && SAFE_ID.test(r.id));
+    for (const r of d[col]) {
+      if ('color' in r && !SAFE_COLOR.test(r.color)) r.color = '#94a3b8';
+      if ('icon' in r) r.icon = cleanIcon(r.icon);
+      if ('emoji' in r) r.emoji = cleanIcon(r.emoji);
+      for (const k of ['accountId', 'toAccountId', 'category', 'holdingId', 'planId', 'recurringId'])
+        if (r[k] && !SAFE_ID.test(r[k])) r[k] = '';
+      for (const k of ['date', 'next', 'end', 'deadline', 'priceDate'])
+        if (r[k] && !SAFE_DATE.test(r[k])) r[k] = k === 'date' ? today() : '';
+      for (const k of ['amount', 'opening', 'shares', 'price', 'fee', 'target', 'saved'])
+        if (k in r && r[k] !== '' && !Number.isFinite(+r[k])) r[k] = 0;
+    }
+  }
+  if (typeof d.budgets !== 'object' || Array.isArray(d.budgets)) d.budgets = {};
+  for (const k of Object.keys(d.budgets)) if (!SAFE_ID.test(k) || !Number.isFinite(+d.budgets[k])) delete d.budgets[k];
+  if (!Array.isArray(d.snapshots)) d.snapshots = [];
+  d.snapshots = d.snapshots.filter(s => s && SAFE_DATE.test(s.d) && Number.isFinite(+s.mv) && Number.isFinite(+s.cb));
+  if (typeof d.tomb !== 'object' || Array.isArray(d.tomb)) d.tomb = {};
   return d;
 }
 const acc = id => S.accounts.find(a => a.id === id);
