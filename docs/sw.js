@@ -1,6 +1,6 @@
 /* Finanzcockpit – Service Worker: macht die App offline-fähig.
    Er speichert ausschließlich den Programmcode. Deine Finanzdaten liegen verschlüsselt im Gerätespeicher und laufen nie hierdurch. */
-const VERSION = '90baa37839f9';
+const VERSION = '2cd528660ff0';
 const CACHE = 'finanzcockpit-' + VERSION;
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 

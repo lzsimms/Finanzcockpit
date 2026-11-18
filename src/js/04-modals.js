@@ -562,7 +562,8 @@ function importModal(fromLock) {
       Vault.adopt(r); S = migrate(r.data); C = null; resetBaseline();
       await Vault.save(S);
       closeModal();
-      if (fromLock) afterUnlock(); else commit('Backup wiederhergestellt ✅');
+      const stand = `Stand ${new Date(blob.saved || Date.now()).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} · ${S.accounts.length} Konten · ${S.transactions.length} Buchungen`;
+      if (fromLock) { afterUnlock(); toast('Übernommen – ' + stand, 'info'); } else commit('Backup wiederhergestellt – ' + stand);
       return false;
     },
   });

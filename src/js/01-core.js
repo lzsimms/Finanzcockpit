@@ -489,6 +489,6 @@ function persist() {
   return saveChain;
 }
 function commit(msg, opts = {}) {
-  C = null; stampChanges(); recordSnapshot(); persist(); render();
+  C = null; stampChanges(); recordSnapshot(); persist(); render(); scheduleAutoSync();
   if (msg) toast(msg, opts.tone || 'ok', opts);
 }

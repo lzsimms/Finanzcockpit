@@ -62,6 +62,7 @@ async function decryptSyncText(text, interactive = true) {
   let blob;
   try { blob = JSON.parse(text); } catch { throw new Error('Die Datei ist keine gültige Finanzcockpit-Datei.'); }
   if (!blob || blob.app !== 'finanzcockpit') throw new Error('Die Datei ist keine gültige Finanzcockpit-Datei.');
+  syncFileSaved = blob.saved || '';
   try { const own = await Vault.decryptOwn(blob); if (own) return own; } catch { }
   if (!interactive) return null;
   const pw = await promptPassword('Diese Sync-Datei wurde mit einem anderen Tresor-Schlüssel verschlüsselt. Gib das Passwort des anderen Geräts ein.');
@@ -69,15 +70,20 @@ async function decryptSyncText(text, interactive = true) {
   try { return (await Vault.decryptBlob(blob, pw)).data; }
   catch (e) { throw new Error(e.name === 'OperationError' ? 'Falsches Passwort für diese Sync-Datei.' : e.message); }
 }
-function applyMerge(remote) {
-  const r = mergeState(S, migrate(remote));
+let syncFileSaved = '';
+const fmtStamp = iso => iso ? new Date(iso).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }) : 'unbekannt';
+function applyMerge(remote, quiet = false) {
+  const m = migrate(remote);
+  const info = { saved: syncFileSaved, accounts: m.accounts.length, tx: m.transactions.length, holdings: m.holdings.length };
+  const r = mergeState(S, m);
   C = null; resetBaseline();
   processDue(S);
   S.settings.lastSync = new Date().toISOString();
   const changed = r.added + r.updated + r.removed;
-  commit(changed ? `Abgeglichen: ${r.added} neu · ${r.updated} geändert${r.removed ? ` · ${r.removed} gelöscht` : ''}` : 'Abgeglichen – alles auf dem neuesten Stand ✅');
-  return r;
+  commit(changed ? `Vom anderen Gerät: ${r.added} neu · ${r.updated} geändert${r.removed ? ` · ${r.removed} gelöscht` : ''}` : quiet ? null : `Nichts Neues – Sync-Datei vom ${fmtStamp(info.saved)}`);
+  return { ...r, info };
 }
+const syncInfoHTML = (r) => `<div class="preview" style="flex-direction:column;gap:4px;text-align:left"><span>Stand der Sync-Datei: <b>${fmtStamp(r.info.saved)}</b></span><span class="muted small">enthält ${r.info.accounts} Konten · ${r.info.tx} Buchungen · ${r.info.holdings} Wertpapiere</span><span class="muted small">übernommen: ${r.added} neu · ${r.updated} geändert · ${r.removed} gelöscht</span></div>`;
 
 function promptPassword(text) {
   return new Promise(res => {
@@ -119,12 +125,13 @@ async function syncWithHandle(h, interactive) {
     if (text.trim()) {
       const remote = await decryptSyncText(text, interactive);
       if (!remote) return false;
-      applyMerge(remote); merged = true;
+      applyMerge(remote, !interactive); merged = true;
     }
     await saveChain;
     const blob = await Vault.encryptBlob(S);
     const w = await h.createWritable(); await w.write(JSON.stringify(blob)); await w.close();
-    if (!merged) { S.settings.lastSync = new Date().toISOString(); commit('Sync-Datei angelegt ✅'); }
+    if (!merged) { S.settings.lastSync = new Date().toISOString(); commit(interactive ? 'Sync-Datei angelegt ✅' : null); }
+    else if (interactive) toast(`In ${h.name} gespeichert – iCloud/OneDrive lädt sie jetzt hoch`, 'info');
     return true;
   } finally { syncBusy = false; }
 }
@@ -135,6 +142,14 @@ async function linkSyncFile(existing) {
     await syncWithHandle(h, true);
   } catch (e) { if (e.name !== 'AbortError') toast(e.message || String(e), 'err'); }
 }
+/** PC: wenige Sekunden nach jeder Änderung still abgleichen – dann ist iCloud/OneDrive immer aktuell */
+let autoSyncTimer = null;
+function scheduleAutoSync() {
+  if (syncBusy || !fsSupported() || !syncHandle) return;
+  clearTimeout(autoSyncTimer);
+  autoSyncTimer = setTimeout(trySilentSync, 4000);
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && S) trySilentSync(); });
 async function trySilentSync() {
   if (!S || !fsSupported()) return;
   if (!syncHandle) syncHandle = await HandleStore.get('sync');
@@ -167,8 +182,12 @@ function mobileSyncModal() {
       if (file.size > 20e6) throw new Error('Die Datei ist zu groß.');
       const remote = await decryptSyncText(await file.text(), true);
       if (!remote) return false;
-      applyMerge(remote);
-      form.querySelector('.modal-body').innerHTML = `<div class="empty" style="padding:16px"><div class="e-ic">✅</div><b>Zusammengeführt!</b><p>Sichere jetzt die aktualisierte Datei zurück in denselben Cloud-Ordner, damit das andere Gerät die Änderungen bekommt.</p><button type="button" class="btn primary" data-share2>${ic('upload', 16)} Aktualisierte Datei sichern</button></div>`;
+      const res = applyMerge(remote);
+      const ageH = res.info.saved ? (Date.now() - new Date(res.info.saved)) / 36e5 : 0;
+      form.querySelector('.modal-body').innerHTML = `<div class="empty" style="padding:8px 4px"><div class="e-ic">✅</div><b>Zusammengeführt!</b></div>${syncInfoHTML(res)}
+        ${ageH > 1 ? `<p class="small warn">⚠️ Die Datei ist ${ageH < 48 ? Math.round(ageH) + ' Stunden' : Math.round(ageH / 24) + ' Tage'} alt. Fehlen Zahlen? Dann am anderen Gerät „Jetzt abgleichen“ tippen, kurz warten, bis iCloud die Datei hochgeladen hat, und hier erneut abgleichen.</p>` : ''}
+        <p class="small muted">Sichere jetzt die aktualisierte Datei zurück in denselben Cloud-Ordner und wähle dort <b>„Ersetzen“</b>.</p>
+        <button type="button" class="btn primary" data-share2>${ic('upload', 16)} Aktualisierte Datei sichern</button>`;
       form.querySelector('[data-share2]').addEventListener('click', async () => { await shareSyncFile(); closeModal(); });
       form.querySelector('[type=submit]').hidden = true;
       return false;
